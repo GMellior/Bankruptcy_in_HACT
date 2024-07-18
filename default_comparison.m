@@ -1,16 +1,20 @@
 % Bankruptcy choice - Comparing 3 methods
-% Code made by Gustavo Mellior
-% This code compares LCP, Splitting method (SM) and Nuno,
-% Hurtado and Thomas' (2023) method (NHTM)
+% Gustavo Mellior g.mellior@liverpool.ac.uk
+% This code compares LCP, Splitting method (SM) and Hurtado, Nuno and Thomas' (2023) method (NHTM)
+
+% set(groot, 'defaulttextInterpreter','latex') 
+% set(groot, 'defaultAxesTickLabelInterpreter','latex') 
+% set(groot, 'defaultAxesFontsize',14) 
+% set(groot, 'defaultLegendInterpreter','latex')
 
 clear; clc; close all
 
 s           = 2;                      % CRRA utility
 rho         = 0.05;                   % Discount rate
-psi         = 2;                      % Mental cost of bankruptcy
+psi         = 0;                      % Mental cost of bankruptcy
 csubs       = 1e-6;                   % Subsistence level of consumption - helps keep slope of V positive, see below
 plotconv    = 0;                      % Set to 1 if you want to see plots during loops - faster if set to zero
-z1          = 0.75;                   % Low income flow
+z1          = 0.75;                   % Low income
 z2          = 1.25;                   % High income
 z           = [z1,z2];              
 la1         = 0.25;                   % Poisson rate low to high
@@ -23,17 +27,35 @@ a           = linspace(amin,amax,I)'; % Wealth grid
 da          = (amax-amin)/(I-1);      % Wealth step
 aa          = [a,a];
 zz          = ones(I,1)*z;
-r           = 0.035./((0.5 + exp(aa-0.15)).*(aa<0) + ones(I,2).*(aa>0)); % Interest rate
+r0          = 0.035;                  % Interest rate
+utility     = @(x) (x.^(1-s))/(1-s);
 maxit       = 100;                    % Max number of loops in V (when using LCP)
 compute_VSM = 0;                      % Set to 1 if you want to compute V with the SM method (it takes a long time)
-maxitSM     = 5000000;
-maxitNM     = 9000000;                % Max number of loops in V (when using Nuno, Hurtado and Thomas)
+maxitSM     = 200000;
+maxitHNT    = 200000;                 % Max number of loops in V (when using Hurtado, Nuno and Thomas)
 crit        = 10^(-6);                % Set very small so that LCP error clears - see further below
-Delta       = 1000;                   % Time step
+Delta       = Inf;                    % Time step in LCP and no default cases
 dVf         = zeros(I,2);             % Pre-allocate memory
 dVb         = zeros(I,2);
 c           = zeros(I,2);
-Aswitch     = [-speye(I)*la(1),speye(I)*la(1);speye(I)*la(2),-speye(I)*la(2)];
+Aswitch     = [-speye(I)*la(1),speye(I)*la(1);speye(I)*la(2),-speye(I)*la(2)]; % Income type transitions
+
+% Bankruptcy value function
+Vstartype = 3;
+if Vstartype==1                             % Not flat V^A - Smooth pasting
+    vnodef = load('vnodef');
+    Vstar = vnodef.vnodef(:,1);
+    Vstar = [Vstar-psi;Vstar-5000];
+    r     = (exp(-(aa-amin))*0.1+r0).*(aa<0) + (aa>=0)*r0;
+elseif Vstartype==2                         % Corner solution - V not flat
+   Vstar  = [-23+1/5*a-psi;(-5000-psi)*ones(I,1)];
+   r      = r0*ones(I,2);
+else                                        % Corner solution - V flat
+    Vstar = [(-23-psi)*ones(I,1);(-5000-psi)*ones(I,1)];
+    r     = r0*ones(I,2);
+end
+Vstarplot       = reshape(Vstar,I,2);          % Just for plotting purposes
+Vstarplot(aa>0) = NaN;                         % Just for plotting purposes
 % Initial guess of non-default V
 v0(:,1)     = ((z(1) + r(:,1).*a).^(1-s) - 1)/(1-s)/rho;
 v0(:,2)     = ((z(2) + r(:,1).*a).^(1-s) - 1)/(1-s)/rho;
@@ -42,11 +64,6 @@ v           = v0;
 % Solver options and initial guess for c(amin)
 options   = optimset('Display','off','MaxIter', 10000, 'MaxFunEvals', 5000);
 x0        = 0.05*z(1,1);
-% Bankruptcy value function
-Vstar     = ((z(2)*1.15 + 0.025*a.*(a<0)).^(1-s) - 1)/(1-s)/rho;
-Vstar     = [Vstar-psi;Vstar-5000];
-Vstarplot       = reshape(Vstar,I,2); % Just for plotting purposes
-Vstarplot(aa>0) = NaN;                % Just for plotting purposes
 
 %% Default not allowed - this will be used as a starting guess for bankruptcy choice
 for n=1:maxit
@@ -63,24 +80,23 @@ for n=1:maxit
         
     % Consumption and savings with forward difference
     cf  = dVf.^(-1/s);
-    ssf = zz + r.*aa - cf;
+    sf  = zz + r.*aa - cf;
     % Consumption and savings with backward difference
     cb  = dVb.^(-1/s);
-    ssb = zz + r.*aa - cb;
+    sb  = zz + r.*aa - cb;
     % Consumption and derivative of value function at the temporary steady state
     c0  = zz + r.*aa;
-    dV0 = c0.^(-s);
     
     % Upwind
-    If        = ssf > 0; %positive drift --> forward difference
-    Ib        = ssb < 0; %negative drift --> backward difference
-    I0        = (1-If-Ib); %at steady state
+    If        = sf > 0;
+    Ib        = sb < 0;
+    I0        = (1-If-Ib);
     c         = cf.*If + cb.*Ib + c0.*I0;
-    u         = (c.^(1-s)-1)/(1-s);
+    u         = utility(c);
     % Build the A matrix
-    X         = - min(ssb,0)/da;
-    Y         = - max(ssf,0)/da + min(ssb,0)/da;
-    Z         =   max(ssf,0)/da;
+    X         = - min(sb,0)/da;
+    Y         = - max(sf,0)/da + min(sb,0)/da;
+    Z         =   max(sf,0)/da;
     A1        = spdiags(Y(:,1),0,I,I)+spdiags(X(2:I,1),-1,I,I)+spdiags([0;Z(1:I-1,1)],1,I,I);
     A2        = spdiags(Y(:,2),0,I,I)+spdiags(X(2:I,2),-1,I,I)+spdiags([0;Z(1:I-1,2)],1,I,I);
     A         = [A1,sparse(I,I);sparse(I,I),A2] + Aswitch;
@@ -94,19 +110,16 @@ for n=1:maxit
     v         = V;
     dist(n)   = max(abs(Vchange(:)));
     if dist(n)<crit
-        % disp('No default value function Converged, Iteration = ')
-        % disp(n)
         break
     end
 end
 
 
 %% LCP
-
 LCPerror        = 1;                  % See related comments below
 fct             = -1;                 % See comments below
-vnodef          = v;
-% V^C = value function no default - V^D = value function default
+vnodef          = v;                  % Save previous result where bankruptcy is not allowed
+t1 = tic;
 for n=1:maxit
     V = v;
     % Find c(amin)
@@ -117,7 +130,7 @@ for n=1:maxit
     driftminusC = r(1,1)*amin+zz(1,1);    % Autarky cons
     psflow      = la(1)*V(1,2);           % Poisson flow in HJB
     dv          = (rho+la(1))*Vstar(1,1); % Multip denominator of V^C out, affects default value net of mental cost
-    params      = [s driftminusC psflow 1 dv]; % Pass arguments to solver
+    params      = [s driftminusC psflow 0 dv]; % Pass arguments to solver
     while fct<0                           % Exploit positive slope of VMatching
         x0 = x0 + 0.1;
         myf1         = @(x) cTsolver(x,params);
@@ -154,9 +167,9 @@ for n=1:maxit
     c0 = r.*aa + zz;
     c0 = max(c0,csubs); 
 
-    Hf = cf.^(1-s)/(1-s) - 1/(1-s) + dVf.*sf;
-    Hb = cb.^(1-s)/(1-s) - 1/(1-s) + dVb.*sb;
-    H0 = c0.^(1-s)/(1-s) - 1/(1-s);
+    Hf = utility(cf) + dVf.*sf;
+    Hb = utility(cb) + dVb.*sb;
+    H0 = utility(c0);
     
     % More flexible approach allowing for non concavity
     Iunique = (sb<0).*(1-(sf>0)) + (1-(sb<0)).*(sf>0);
@@ -167,7 +180,7 @@ for n=1:maxit
     
     % Use upwind scheme to get consumption
     c       = cf.*If + cb.*Ib + c0.*I0;
-    u       = (c.^(1-s)-1)/(1-s);
+    u       = utility(c);
     adot    = sf.*If+sb.*Ib;
     % Build the A matrix
     X       = -Ib.*sb./da;
@@ -199,36 +212,49 @@ for n=1:maxit
     V             = reshape(V_stacked,I,2);
     Vchange       = V - v;
     v             = V;
-    % We need to set a laxer crit for LCPerror and exit threshold
-    spindex = find(abs(V_stacked-Vstar)<crit*1000); % Indicator of bankruptcy
-    if isempty(spindex)==1
-        spindex = 1;
-    end
-    
     dist(n) = max(abs(Vchange(:)));
     % Convergence
     if (dist(n)<crit)&&(LCP_error<crit*1000) % Laxer to avoid cycles on LCPerror
         conv = 1;
-         disp('****** HJBVI SOLVED ******');
+         % disp('****** HJBVI SOLVED ******');
         break
-    else
-        sprintf('Change in V = %0.10g ---- LCP_error = %0.10g',[dist(n) LCP_error])
-        if (LCPerror(n+1)-LCPerror(n))==0 % When this equals zero the algo might get stuck
-            disp('LCPerror getting stuck');
-            break
-        end
     end
 
 end
-VLCP = V;
+nLCP         = n;
+timeLCP      = toc(t1);
+VLCP         = V;
+distLCP      = dist(n);
+LCPindx      = abs(VLCP(1:I,1)-Vstar(1:I))<1e-6;
+bdry_LCP     = find(LCPindx,1,'last');
+VrelLCP      = max(abs(Vchange(:)./VLCP(:)));
+temp0        = rho*V(:)- utility(c(:)) - A*V(:);
+temp1        = V(:);
+HJBerrLCP    = max(abs( temp0(bdry_LCP+1:end) ));
+HJBerrRelLCP = max(abs( temp0(bdry_LCP+1:end)./temp1(bdry_LCP+1:end) ));
 
 %% Splitting method
-v       = vnodef;
-dt      = 0.0001;
+if Vstartype>1
+    dt = 0.01;
+else
+    dt = 0.05;
+end
+
+plot(a,vnodef(:,1),a,V(:,1),'LineWidth',2)
+hold on
+plot(a,V(1:I,1),'LineWidth',2,'color',[0 0 0.6])
+plot(a,Vstar(1:I),'k--','LineWidth',2)
+hold off
+grid
+legend('$V^H$','$V^D$','$V_{LCP}$','Box','off','Location','southeast')
+xlim([amin 2])
+drawnow
+
+v = vnodef;
+t2 = tic;
 if compute_VSM==1
     for n=1:maxitSM
         V = v;
-    
         % Find c(amin)
         cT          = zeros(1,1);
         a3store     = cT;
@@ -237,7 +263,7 @@ if compute_VSM==1
         driftminusC = r(1,1)*amin+zz(1,1);    % Autarky cons
         psflow      = la(1)*V(1,2);           % Poisson flow in HJB
         dv          = (rho+la(1))*Vstar(1,1); % Multip denominator of V^C out, affects default value net of mental cost
-        params      = [s driftminusC psflow 1 dv]; % Pass arguments to solver
+        params      = [s driftminusC psflow 0 dv]; % Pass arguments to solver
         while fct<0                           % Exploit positive slope of VMatching
             x0 = x0 + 0.1;
             myf1         = @(x) cTsolver(x,params);
@@ -265,15 +291,14 @@ if compute_VSM==1
         dVf          = max(dVf,csubs);     
         dVb          = max(dVb,csubs);
         cf           = dVf.^(-1/s);
-        ssf          = zz + r.*aa - cf;
+        sf           = zz + r.*aa - cf;
         cb           = dVb.^(-1/s);
-        ssb          = zz + r.*aa - cb;
+        sb           = zz + r.*aa - cb;
         c0           = zz + r.*aa;
-        dV0          = c0.^(-s);
         % Hamiltonians
-        Hf           = cf.^(1-s)/(1-s) - 1/(1-s) + dVf.*sf;
-        Hb           = cb.^(1-s)/(1-s) - 1/(1-s) + dVb.*sb;
-        H0           = c0.^(1-s)/(1-s) - 1/(1-s);
+        Hf           = utility(cf) + dVf.*sf;
+        Hb           = utility(cb) + dVb.*sb;
+        H0           = utility(c0);
     
         % Indicator functions
         Iunique      = (sb<0).*(1-(sf>0)) + (1-(sb<0)).*(sf>0);
@@ -282,11 +307,12 @@ if compute_VSM==1
         If           = Iunique.*(sf>0).*(Hf>H0) + Iboth.*(Hf>Hb).*(Hf>H0);
         I0           = 1-Ib-If;
         c            = cf.*If + cb.*Ib + c0.*I0;
-        u            = (c.^(1-s)-1)/(1-s);
+        u            = utility(c);
+        adot         = sf.*If+sb.*Ib;
         % Build the A matrix
-        X = - min(ssb,0)/da;
-        Y = - max(ssf,0)/da + min(ssb,0)/da;
-        Z =   max(ssf,0)/da;
+        X = - min(sb,0)/da;
+        Y = - max(sf,0)/da + min(sb,0)/da;
+        Z =   max(sf,0)/da;
     
         % ******** Fix entries on A matrix ***********
         Y(1)   = Y(1) - min(adot(1,1)/da,0); % Y(1) + X(1)
@@ -296,7 +322,13 @@ if compute_VSM==1
         A1 = spdiags(Y(:,1),0,I,I)+spdiags(X(2:I,1),-1,I,I)+spdiags([0;Z(1:I-1,1)],1,I,I);
         A2 = spdiags(Y(:,2),0,I,I)+spdiags(X(2:I,2),-1,I,I)+spdiags([0;Z(1:I-1,2)],1,I,I);
         A  = [A1,sparse(I,I);sparse(I,I),A2] + Aswitch;
-    
+        
+        switch Vstartype
+            case {2,3}
+            if n>800
+                dt = 0.00005;
+            end
+        end
         B         = (rho + 1/dt)*speye(2*I) - A;
         u_stacked = [u(:,1);u(:,2)];
         V_stacked = [V(:,1);V(:,2)];
@@ -305,32 +337,65 @@ if compute_VSM==1
         V         = reshape(V_stacked,I,2);
         Vchange   = V - v;
         v         = V;
+        dist(n)   = max(max(abs(Vchange)));
+        % if mod(n,50000)==0
+        %     figure(1)
+        %     subplot(121)
+        %     plot(a,vnodef(:,1),a,V(:,1),'LineWidth',2)
+        %     hold on
+        %     plot(a,Vstar(1:I),'k--','LineWidth',2)
+        %     grid
+        %     xlim([amin 2])
+        %     plot(a,V(:,1),'-.','linewidth',3,'color',[0 0.5 0])
+        %     SMindx  = abs(V(1:I,1)-Vstar(1:I))<1e-6;
+        %     bdry_SM = find(SMindx,1,'last');
+        %     scatter(a(bdry_LCP),VLCP(bdry_LCP),200,'filled','MarkerFaceColor',[0 0 0.6])
+        %     scatter(a(bdry_SM),V(bdry_SM),100,'filled','MarkerFaceColor',[0 0.5 0])
+        %     hold off
+        %     legend('$V_{H}$','$V^D$','$V_{SM}$','Box','off','Location','southeast')
+        %     subplot(122)
+        %     plot(log10(dist),'linewidth',3)
+        %     grid
+        %     drawnow
+        % end
     
-        if mod(n,10000)==0
-            plot(a,V,'linewidth',3)
-            grid on
-            drawnow
-        end
-    
-        dist(n) = max(max(abs(Vchange)));
         if dist(n)<crit
             disp('Splitting method value Function Converged, Iteration = ')
             disp(n)
             break
         end
     end
-
-    VSM = V;
-    nSM = n;
+    timeSM      = toc(t2);
+    VSM         = V;
+    nSM         = n;
+    SMindx      = abs(VSM(1:I,1)-Vstar(1:I))<1e-6;
+    distSM      = dist(n);
+    bdry_SM     = find(SMindx,1,'last');
+    temp0       = rho*VSM(:)- utility(c(:)) - A*VSM(:);
+    temp1       = VSM(:);
+    HJBerrSM    = max(abs( temp0(bdry_SM+1:end) ));
+    HJBerrRelSM = max(abs( temp0(bdry_SM+1:end)./temp1(bdry_SM+1:end) ));
+else
+    typeres     = strcat('VSMres',num2str(Vstartype));
+    VSMres      = load(typeres);
+    timeSM      = VSMres.timeSM;
+    VSM         = VSMres.VSM;
+    nSM         = VSMres.nSM;
+    SMindx      = VSMres.SMindx;
+    distSM      = VSMres.distSM;
+    bdry_SM     = VSMres.bdry_SM;
+    HJBerrSM    = VSMres.HJBerrSM;
+    HJBerrRelSM = VSMres.HJBerrRelSM;
 end
 
 %% Nuno, Hurtado and Thomas' method
 
 v     = vnodef;
-lam   = 370;
+lam   = 370/2;
 Delta = 0.005;
 clear('dist')
-for n=1:maxitNM
+t3    = tic;
+for n=1:maxitHNT
     V            = v;
     % Forward difference
     dVf(1:I-1,:) = (V(2:I,:)-V(1:I-1,:))/da;
@@ -343,17 +408,16 @@ for n=1:maxitNM
     dVb          = max(dVb,csubs);
     % Consumption and savings with forward difference
     cf           = dVf.^(-1/s);
-    ssf          = zz + r.*aa - cf;
+    sf           = zz + r.*aa - cf;
     % Consumption and savings with backward difference
     cb           = dVb.^(-1/s);
-    ssb          = zz + r.*aa - cb;
+    sb           = zz + r.*aa - cb;
     % Consumption and derivative of value function at the temporary steady state
     c0           = zz + r.*aa;
-    dV0          = c0.^(-s);
     % Hamiltonians
-    Hf           = cf.^(1-s)/(1-s) - 1/(1-s) + dVf.*sf;
-    Hb           = cb.^(1-s)/(1-s) - 1/(1-s) + dVb.*sb;
-    H0           = c0.^(1-s)/(1-s) - 1/(1-s);
+    Hf           = utility(cf) + dVf.*sf;
+    Hb           = utility(cb) + dVb.*sb;
+    H0           = utility(c0);
     % Indicator functions
     Iunique      = (sb<0).*(1-(sf>0)) + (1-(sb<0)).*(sf>0);
     Iboth        = (sb<0).*(sf>0);
@@ -361,12 +425,12 @@ for n=1:maxitNM
     If           = Iunique.*(sf>0) + Iboth.*(Hf>Hb).*(Hf>H0);
     I0           = 1-Ib-If;
     c            = cf.*If + cb.*Ib + c0.*I0;
-    u            = (c.^(1-s)-1)/(1-s);
+    u            = utility(c);
     
     % Build the A matrix
-    X            = - min(ssb,0)/da;
-    Y            = - max(ssf,0)/da + min(ssb,0)/da;
-    Z            =   max(ssf,0)/da;
+    X            = - min(sb,0)/da;
+    Y            = - max(sf,0)/da + min(sb,0)/da;
+    Z            =   max(sf,0)/da;
     A1           = spdiags(Y(:,1),0,I,I)+spdiags(X(2:I,1),-1,I,I)+spdiags([0;Z(1:I-1,1)],1,I,I);
     A2           = spdiags(Y(:,2),0,I,I)+spdiags(X(2:I,2),-1,I,I)+spdiags([0;Z(1:I-1,2)],1,I,I);
     A            = [A1,sparse(I,I);sparse(I,I),A2] + Aswitch;
@@ -380,79 +444,114 @@ for n=1:maxitNM
     v            = V;
     dist(n)      = max(abs(Vchange(:)));
 
-    if mod(n,1000)==0
-        subplot(121)
-        plot(a,V(:,1),'linewidth',3)
-        hold on
-        plot(a,Vstar(1:I),'k--','linewidth',3)
-        hold off
-        grid on
-        subplot(122)
-        plot(log10(dist),'linewidth',3)
-        grid on
-        drawnow
-    end
+    % if mod(n,2000)==0
+    %     figure(1)
+    %     subplot(121)
+    %     plot(a,vnodef(:,1),a,V(:,1),'LineWidth',2)
+    %     hold on
+    %     plot(a,Vstar(1:I),'k--','LineWidth',2)
+    %     grid
+    %     xlim([amin 2])
+    %     plot(a,V(:,1),'-.','linewidth',3,'color',[1 0 0])
+    %     NHTMindx  = V(1:I,1)-Vstar(1:I)<1e-6;
+    %     bdry_NHTM = find(NHTMindx,1,'last');
+    %     scatter(a(bdry_LCP),VLCP(bdry_LCP,1),200,'filled','MarkerFaceColor',[0 0 0.6])
+    %     scatter(a(bdry_SM),VSM(bdry_SM,1),100,'filled','MarkerFaceColor',[0 0.5 0])
+    %     scatter(a(bdry_NHTM),V(bdry_NHTM,1),50,'filled','MarkerFaceColor',[1 0 0])
+    %     hold off
+    %     legend('$V_{H}$','$V^D$','$V_{NT}$','Box','off','Location','southeast')
+    %     subplot(122)
+    %     plot(log10(dist),'linewidth',3)
+    %     grid
+    %     drawnow
+    % end
     
     if dist(n)<crit
-        disp('NHT Value Function Converged, Iteration = ')
-        disp(n)
         break
     end
 end
-VNHTM = V;
-nNHTM = n;
+timeHNT = toc(t3);
+VNHNT   = V;
+distHNT = dist(n);
+nHNT    = n;
+VrelHNT = max(abs(Vchange(:)./VNHNT(:)));
 
-%% Plots
-
-if compute_VSM==0
-    load('VSM')
-end
-
+%% Results
 % Get the default boundary
-LCPindx          = abs(VLCP(1:I,1)-Vstar(1:I))<1e-6;
-SMindx           = abs(VSM(1:I,1)-Vstar(1:I))<1e-6;
-NHTMindx         = VNHTM(1:I,1)-Vstar(1:I)<1e-6;
-bdry_LCP         = find(LCPindx,1,'last');
-bdry_SM          = find(SMindx,1,'last');
-bdry_NHTM        = find(NHTMindx,1,'last');
+
+NHTMindx         = VNHNT(1:I,1)-Vstar(1:I)<1e-6;
+bdry_HNT         = find(NHTMindx,1,'last');
 VLCP_Vstar_diff  = VLCP(:,1)-Vstarplot(:,1);
 VSM_Vstar_diff   = VSM(:,1)-Vstarplot(:,1);
-VNHTM_Vstar_diff = VNHTM(:,1)-Vstarplot(:,1);
+VNHTM_Vstar_diff = VNHNT(:,1)-Vstarplot(:,1);
+temp0            = rho*V(:)- utility(c(:)) - A*V(:);
+temp1            = V(:);
+HJBerrHNT        = max(abs( temp0(bdry_HNT+1:end) ));
+HJBerrRelHNT     = max(abs( temp0(bdry_HNT+1:end)./temp1(bdry_HNT+1:end) ));
 % For plotting purposes
 VLCP2            = VLCP;
 VSM2             = VSM;
-VNHTM2           = VNHTM;
+VHNTM2           = VNHNT;
 VLCP2(LCPindx)   = NaN;
 VSM2(SMindx)     = NaN;
-VNHTM2(NHTMindx) = NaN;
-
-subplot(121)
-plot(a,Vstarplot(:,1),'linewidth',6)
-hold on
-plot(a,VLCP2(:,1),'linewidth',4)
-plot(a,VSM2(:,1),'-.','linewidth',2)
-plot(a,VNHTM2(:,1),'k--','linewidth',1)
-scatter(a(bdry_LCP),Vstar(bdry_LCP),60,'k','filled')
-hold off
-grid on
-xlabel('Wealth')
-ylabel('Value functions')
-legend('V^D','VLCP','VSM','VNHTM','Default boundary','location','Northwest')
-legend('boxoff')
-subplot(122)
-plot(a,VLCP_Vstar_diff,'linewidth',4)
-hold on
-plot(a,VSM_Vstar_diff,'-.','linewidth',2)
-plot(a,VNHTM_Vstar_diff,'k--','linewidth',1)
-scatter(a(bdry_LCP),0,60,'k','filled')
-hold off
-grid on
-xlabel('Wealth')
-ylabel('V^C-V^D')
-legend('VLCP','VSM','VNHTM','Default boundary','location','Northwest')
-legend('boxoff')
+VHNTM2(NHTMindx) = NaN;
 
 clc
 disp('Default boundary')
 disp('      LCP      SM        NHTM')
-disp([a(bdry_LCP) a(bdry_SM) a(bdry_NHTM)])
+disp([a(bdry_LCP) a(bdry_SM) a(bdry_HNT)])
+disp('')
+disp('Convergence')
+fprintf('      LCP \t      SM \t        NHTM \t \n\n')
+disp([distLCP distSM distHNT])
+
+disp('')
+disp('HJB equation errors')
+disp('')
+disp('Absolute error')
+fprintf('      LCP \t      SM \t        NHTM \t \n\n')
+disp([HJBerrLCP HJBerrSM HJBerrHNT])
+disp('')
+disp('Relative error')
+% fprintf('\t\t\t\t\t %i\t %i\t %i\n', la, lb, la+lb);
+fprintf('      LCP \t      SM \t        NHTM \t \n\n')
+fprintf('\t %f\t %f\t %f\n', abs([HJBerrRelLCP HJBerrRelSM HJBerrRelHNT]))
+
+
+%% Create figures in the paper
+
+if Vstartype>1
+    figure
+    plot(a,vnodef(:,1),'color',0.6*ones(1,3),'linewidth',2)
+    hold on
+    plot(a,VLCP(:,1),'linewidth',2,'Color',[0 0 0.6])
+    plot(a,Vstarplot(:,1),'k--','linewidth',2)
+    plot(a(bdry_LCP)*ones(2,1),linspace(min(vnodef(:))*1.1,max(VLCP(:))*1.1,2),'k--')
+    hold off
+    grid on
+    axis tight
+    xlabel('$a$')
+    ylabel('$V(a)$')
+    legend('$V^H_L$','$V_{L}^N$','$V^D$','$a*=\underline{a}$','Default boundary','location','Southeast','Box','off')
+    xlim([amin*1.1 2])
+    if Vstartype==3
+        saveas(gcf,'Figure1a','epsc')
+    else
+        saveas(gcf,'Figure2','epsc')
+    end
+else
+    figure
+    plot(a,vnodef(:,1),'color',0.6*ones(1,3),'linewidth',2)
+    hold on
+    plot(a,VLCP(:,1),'linewidth',2,'Color',[0 0 0.6])
+    plot(a,Vstarplot(:,1),'k--','linewidth',2)
+    plot(a(bdry_LCP)*ones(2,1),linspace(min(vnodef(:))*1.1,max(VLCP(:))*1.1,2),'k--')
+    hold off
+    grid on
+    xlabel('$a$')
+    ylabel('$V(a)$')
+    legend('$V^H_L$','$V_{L}^N$','$V^D$','$a*>\underline{a}$','Default boundary','location','Southeast','Box','off')
+    axis tight
+    xlim([amin*1.1 2])
+    saveas(gcf,'Figure1b','epsc')
+end
