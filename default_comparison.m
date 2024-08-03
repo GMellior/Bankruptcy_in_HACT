@@ -9,7 +9,6 @@ set(groot, 'defaultLegendInterpreter','latex')
 
 clear; clc; close all
 
-producetable= 1;                      % Produce LaTeX table with results of all cases
 saveresults = 0;                      % Save results
 show_c_S    = 0;                      % Show consumption policy and drift
 compute_VSM = 1;                      % Set to 1 if you want to compute V with the SM method (it can take a long time)
